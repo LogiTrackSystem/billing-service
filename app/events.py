@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from .database import SessionLocal
 from .models import CostoRuta, Factura, TarifaCliente
+from .pedidos import PayloadInvalido, registrar_cobro
+from .reembolsos import registrar_solicitud
 
 RABBITMQ_URL = os.getenv("RABBITMQ_URL")
 SHIPMENT_SERVICE_URL = os.getenv("SHIPMENT_SERVICE_URL")
@@ -133,6 +135,34 @@ async def _on_message(message: aio_pika.IncomingMessage):
         await _procesar_shipment_delivered(payload)
 
 
+async def _on_shipment_created(message: aio_pika.IncomingMessage):
+    """Registra el pago simulado y la factura del pedido. Un evento mal formado se descarta (se registra
+    en consola); si falla la base de datos el mensaje vuelve a la cola para reintentarse."""
+    async with message.process(requeue=True):
+        payload = json.loads(message.body.decode())
+        db: Session = SessionLocal()
+        try:
+            registrar_cobro(db, payload)
+        except PayloadInvalido as exc:
+            print(f"[billing] shipment.created descartado: {exc}")
+        finally:
+            db.close()
+
+
+async def _on_cierre_de_pedido(message: aio_pika.IncomingMessage):
+    """shipment.cancelled / shipment.returned: deja registrada la solicitud de reembolso del pedido cobrado.
+    El reembolso lo ejecuta un administrador. Evento mal formado: se descarta; error de base de datos: se reintenta."""
+    async with message.process(requeue=True):
+        payload = json.loads(message.body.decode())
+        db: Session = SessionLocal()
+        try:
+            registrar_solicitud(db, message.routing_key, payload)
+        except PayloadInvalido as exc:
+            print(f"[billing] {message.routing_key} descartado: {exc}")
+        finally:
+            db.close()
+
+
 async def iniciar_consumidor():
     connection = await aio_pika.connect_robust(RABBITMQ_URL)
     channel = await connection.channel()
@@ -142,4 +172,19 @@ async def iniciar_consumidor():
     queue = await channel.declare_queue("billing_service.shipment_delivered", durable=True)
     await queue.bind(exchange, routing_key="shipment.delivered")
     await queue.consume(_on_message)
+
+    cola_pedidos = await channel.declare_queue("billing_service.shipment_created", durable=True)
+    # created: pedido inmediato o programado que ya llegó a su hora; scheduled: pedido programado aceptado
+    # (el pago se registra al aceptar el precio). El registro es idempotente por envío.
+    await cola_pedidos.bind(exchange, routing_key="shipment.created")
+    await cola_pedidos.bind(exchange, routing_key="shipment.scheduled")
+    # split: pedido dividido en partes; el pago es del pedido (las partes no llevan monto)
+    await cola_pedidos.bind(exchange, routing_key="shipment.split")
+    await cola_pedidos.consume(_on_shipment_created)
+
+    # cancelado o devuelto: el pedido cobrado queda pendiente de reembolso (lo ejecuta el administrador)
+    cola_cierres = await channel.declare_queue("billing_service.pedido_cerrado", durable=True)
+    await cola_cierres.bind(exchange, routing_key="shipment.cancelled")
+    await cola_cierres.bind(exchange, routing_key="shipment.returned")
+    await cola_cierres.consume(_on_cierre_de_pedido)
     return connection
