@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import aio_pika
 import httpx
+from .interno import cabeceras_internas
 from sqlalchemy.orm import Session
 
 from .database import SessionLocal
@@ -29,7 +30,7 @@ async def _obtener_envio(envio_id: str):
     if not SHIPMENT_SERVICE_URL:
         return None
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, headers=cabeceras_internas()) as client:
             resp = await client.get(f"{SHIPMENT_SERVICE_URL}/envios/{envio_id}")
             resp.raise_for_status()
             return resp.json()
@@ -41,7 +42,7 @@ async def _obtener_ruta_por_envio(envio_id: str):
     if not ROUTING_SERVICE_URL:
         return None
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, headers=cabeceras_internas()) as client:
             resp = await client.get(f"{ROUTING_SERVICE_URL}/rutas/", params={"envio_id": envio_id})
             resp.raise_for_status()
             rutas = resp.json()
