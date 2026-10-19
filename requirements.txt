@@ -7,3 +7,4 @@ psycopg2-binary==2.9.13
 python-dotenv==1.2.3
 aio-pika==10.1.0
 httpx==0.28.1
+psycopg[binary]
