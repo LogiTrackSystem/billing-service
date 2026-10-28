@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from .interno import proteger_servicio
@@ -25,4 +26,4 @@ app.include_router(facturas_pedido.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "billing-service"}
+    return {"status": "ok", "service": "billing-service", "version": os.getenv("APP_VERSION", "dev")}
