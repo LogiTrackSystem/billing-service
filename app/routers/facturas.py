@@ -1,7 +1,7 @@
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -12,9 +12,24 @@ from ..events import _periodo_actual
 router = APIRouter(prefix="/facturas", tags=["Facturas"])
 
 
+def _uuid_o_403(valor: str) -> UUID:
+    try:
+        return UUID(valor)
+    except ValueError:
+        raise HTTPException(status_code=403, detail={"codigo": "SIN_PERMISO", "mensaje": "Identidad de cliente no válida"})
+
+
 @router.get("/", response_model=List[FacturaLeer])
-def listar_facturas(cliente_id: Optional[UUID] = None, periodo: Optional[str] = None, estado: Optional[str] = None, db: Session = Depends(get_db)):
+def listar_facturas(
+    cliente_id: Optional[UUID] = None,
+    periodo: Optional[str] = None,
+    estado: Optional[str] = None,
+    db: Session = Depends(get_db),
+    x_cliente_id: Optional[str] = Header(default=None),
+):
     query = db.query(Factura)
+    if x_cliente_id:  # lo envía el gateway para cuentas de cliente: solo ven lo suyo
+        cliente_id = _uuid_o_403(x_cliente_id)
     if cliente_id:
         query = query.filter(Factura.cliente_id == cliente_id)
     if periodo:
@@ -25,9 +40,9 @@ def listar_facturas(cliente_id: Optional[UUID] = None, periodo: Optional[str] = 
 
 
 @router.get("/{factura_id}", response_model=FacturaLeer)
-def obtener_factura(factura_id: UUID, db: Session = Depends(get_db)):
+def obtener_factura(factura_id: UUID, db: Session = Depends(get_db), x_cliente_id: Optional[str] = Header(default=None)):
     factura = db.query(Factura).filter(Factura.id == factura_id).first()
-    if factura is None:
+    if factura is None or (x_cliente_id and factura.cliente_id != _uuid_o_403(x_cliente_id)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Factura no encontrada")
     return factura
 
